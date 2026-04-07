@@ -1,9 +1,14 @@
 import sys
 
-# Guard: if Streamlit is running this file, redirect the user and exit cleanly.
-if any("streamlit" in arg for arg in sys.argv):
-    print("app.py is a CLI tool. Run the Streamlit app instead:\n  streamlit run streamlit_app.py")
-    sys.exit(0)
+# Guard: detect Streamlit's runtime and bail before argparse fires.
+try:
+    from streamlit.runtime.scriptrunner import get_script_run_ctx as _get_ctx
+    if _get_ctx() is not None:
+        import streamlit as st
+        st.error("**app.py is the CLI entry point.** Run the Streamlit app instead:\n```\nstreamlit run streamlit_app.py\n```")
+        st.stop()
+except ImportError:
+    pass
 
 import argparse
 from pathlib import Path
