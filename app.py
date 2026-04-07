@@ -1,6 +1,12 @@
+import sys
+
+# Guard: if Streamlit is running this file, redirect the user and exit cleanly.
+if any("streamlit" in arg for arg in sys.argv):
+    print("app.py is a CLI tool. Run the Streamlit app instead:\n  streamlit run streamlit_app.py")
+    sys.exit(0)
+
 import argparse
 from pathlib import Path
-import sys
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
@@ -68,7 +74,6 @@ def parse_ion_values(value: str | None) -> dict[str, float]:
 
 
 def main():
-    print("Brine Bot CLI starting. To run Streamlit use: streamlit run \"streamlit_app.py\"")
     run_cli()
 
 
