@@ -89,11 +89,12 @@ def main():
         ["Prepare brine instructions", "Split into cationic/anionic brines"],
     )
     volume_l = st.sidebar.number_input("Preparation volume (L)", min_value=0.1, value=1.0, step=0.1)
-    unit = st.sidebar.radio("Concentration unit", ["mol/L", "mg/L"])
     input_type = st.sidebar.radio("Input type", ["Manual entry", "Upload PDF / image"])
 
     # ── composition input ─────────────────────────────────────────────────────
     composition = None
+
+    unit = st.radio("Concentration unit", ["mg/L", "mol/L"], horizontal=True)
 
     if input_type == "Manual entry":
         composition = build_manual_composition(unit)
