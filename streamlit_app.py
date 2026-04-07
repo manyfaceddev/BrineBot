@@ -9,7 +9,7 @@ from brine_models import STANDARD_CATIONS, STANDARD_ANIONS, ION_MOLAR_MASSES
 
 # Sample brine: SARB FW1 (mg/L)
 SAMPLE_BRINES = {
-    "SARB FW1": {
+    "Example FW": {
         "cations": {"Na": 274915, "K": 58695, "Ca": 4087, "Mg": 34469, "Sr": 2880, "Ba": 2377, "Fe": 202},
         "anions":  {"Cl": 166615, "SO4": 28, "HCO3": 136},
         "unit": "mg/L",
