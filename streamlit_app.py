@@ -6,6 +6,15 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from brine_models import STANDARD_CATIONS, STANDARD_ANIONS, ION_MOLAR_MASSES
+
+# Sample brine: SARB FW1 (mg/L)
+SAMPLE_BRINES = {
+    "SARB FW1": {
+        "cations": {"Na": 274915, "K": 58695, "Ca": 4087, "Mg": 34469, "Sr": 2880, "Ba": 2377, "Fe": 202},
+        "anions":  {"Cl": 166615, "SO4": 28, "HCO3": 136},
+        "unit": "mg/L",
+    },
+}
 from input_tools import (
     normalize_manually_entered_composition,
     make_dropdown_options,
@@ -91,10 +100,23 @@ def main():
     volume_l = st.sidebar.number_input("Preparation volume (L)", min_value=0.1, value=1.0, step=0.1)
     input_type = st.sidebar.radio("Input type", ["Manual entry", "Upload PDF / image"])
 
+    # ── sample loader ─────────────────────────────────────────────────────────
+    st.sidebar.divider()
+    st.sidebar.markdown("**Load sample brine**")
+    sample_name = st.sidebar.selectbox("Sample", ["— none —"] + list(SAMPLE_BRINES.keys()), label_visibility="collapsed")
+    if st.sidebar.button("Load sample"):
+        sample = SAMPLE_BRINES[sample_name]
+        for ion, val in sample["cations"].items():
+            st.session_state[f"cat_{ion}"] = float(val)
+        for ion, val in sample["anions"].items():
+            st.session_state[f"an_{ion}"] = float(val)
+        st.session_state["unit"] = sample["unit"]
+        st.rerun()
+
     # ── composition input ─────────────────────────────────────────────────────
     composition = None
 
-    unit = st.radio("Concentration unit", ["mg/L", "mol/L"], horizontal=True)
+    unit = st.radio("Concentration unit", ["mg/L", "mol/L"], horizontal=True, key="unit")
 
     if input_type == "Manual entry":
         composition = build_manual_composition(unit)

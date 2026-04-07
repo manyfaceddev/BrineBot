@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List
 
 STANDARD_CATIONS: List[str] = ["Na", "Ca", "Mg", "K", "Mn", "Zn", "Fe", "Sr", "Ba"]
-STANDARD_ANIONS: List[str] = ["Cl", "OH", "HCO3", "CO3", "Br"]
+STANDARD_ANIONS: List[str] = ["Cl", "SO4", "HCO3", "CO3", "OH", "Br"]
 
 ION_CHARGES = {
     "Na": 1,
