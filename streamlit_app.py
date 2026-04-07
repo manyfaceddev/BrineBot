@@ -10,8 +10,8 @@ from brine_models import STANDARD_CATIONS, STANDARD_ANIONS, ION_MOLAR_MASSES
 # Sample brine: SARB FW1 (mg/L)
 SAMPLE_BRINES = {
     "Example FW": {
-        "cations": {"Na": 274915, "K": 58695, "Ca": 4087, "Mg": 34469, "Sr": 2880, "Ba": 2377, "Fe": 202},
-        "anions":  {"Cl": 166615, "SO4": 28, "HCO3": 136},
+        "cations": {"Na": 58695, "K": 4087, "Ca": 34469, "Mg": 2880, "Sr": 2377, "Ba": 28, "Fe": 202},
+        "anions":  {"Cl": 166615, "SO4": 136, "HCO3": 250},
         "unit": "mg/L",
     },
 }
@@ -60,8 +60,11 @@ def build_manual_composition(unit: str):
     cations_moll = {}
     for ion in cation_options:
         if ion and ion[0].isupper():
+            key = f"cat_{ion}"
+            if key not in st.session_state:
+                st.session_state[key] = 0.0
             raw = st.number_input(
-                f"{ion} ({unit})", min_value=0.0, value=0.0, step=step, format=fmt, key=f"cat_{ion}"
+                f"{ion} ({unit})", min_value=0.0, step=step, format=fmt, key=key
             )
             if raw > 0:
                 cations_moll[ion] = _parse_manual_conc(ion, raw, unit)
@@ -70,8 +73,11 @@ def build_manual_composition(unit: str):
     anions_moll = {}
     for ion in anion_options:
         if ion:
+            key = f"an_{ion}"
+            if key not in st.session_state:
+                st.session_state[key] = 0.0
             raw = st.number_input(
-                f"{ion} ({unit})", min_value=0.0, value=0.0, step=step, format=fmt, key=f"an_{ion}"
+                f"{ion} ({unit})", min_value=0.0, step=step, format=fmt, key=key
             )
             if raw > 0:
                 anions_moll[ion] = _parse_manual_conc(ion, raw, unit)
