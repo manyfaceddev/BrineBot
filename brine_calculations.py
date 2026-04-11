@@ -11,11 +11,13 @@ def _ion_equivalents(concentration: float, ion: str) -> float:
 
 
 def mgl_to_moll(ion: str, conc_mgl: float) -> float:
-    """Convert mg/L to mol/L for a given ion."""
+    """Convert mg/L to mol/L for a given ion.
+    mg/L ÷ (g/mol × 1000 mg/g) = mol/L
+    """
     mw = ION_MOLAR_MASSES.get(ion)
     if mw is None or mw <= 0:
         raise ValueError(f"No molar mass for ion '{ion}'.")
-    return conc_mgl / mw
+    return conc_mgl / (mw * 1000)
 
 
 def moll_to_mgl(ion: str, conc_moll: float) -> float:
@@ -23,7 +25,7 @@ def moll_to_mgl(ion: str, conc_moll: float) -> float:
     mw = ION_MOLAR_MASSES.get(ion)
     if mw is None or mw <= 0:
         raise ValueError(f"No molar mass for ion '{ion}'.")
-    return conc_moll * mw
+    return conc_moll * mw * 1000
 
 
 def convert_composition_units(
