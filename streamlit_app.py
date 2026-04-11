@@ -27,6 +27,7 @@ from brine_calculations import (
     validate_charge_balance,
     mgl_to_moll,
     convert_composition_units,
+    mix_compositions,
 )
 
 
@@ -44,12 +45,14 @@ def _parse_manual_conc(ion: str, raw: float, unit: str) -> float:
 
 # ── UI sections ──────────────────────────────────────────────────────────────
 
-def build_manual_composition(unit: str):
-    st.header("Manual brine composition")
+def build_manual_composition(unit: str, key_prefix: str = ""):
+    if not key_prefix:
+        st.header("Manual brine composition")
 
     custom_entries = st.text_input(
         "Add custom ions (comma-separated). Capitalise cations, lowercase anions.",
         value="",
+        key=f"{key_prefix}custom_ions",
     )
     cation_options, anion_options = make_dropdown_options(custom_entries)
 
@@ -60,7 +63,7 @@ def build_manual_composition(unit: str):
     cations_moll = {}
     for ion in cation_options:
         if ion and ion[0].isupper():
-            key = f"cat_{ion}"
+            key = f"{key_prefix}cat_{ion}"
             if key not in st.session_state:
                 st.session_state[key] = 0.0
             raw = st.number_input(
@@ -73,7 +76,7 @@ def build_manual_composition(unit: str):
     anions_moll = {}
     for ion in anion_options:
         if ion:
-            key = f"an_{ion}"
+            key = f"{key_prefix}an_{ion}"
             if key not in st.session_state:
                 st.session_state[key] = 0.0
             raw = st.number_input(
@@ -169,12 +172,66 @@ def main():
 
         if instructions:
             for inst in instructions:
-                st.write(f"- **{inst.salt_name}** ({inst.formula}): **{inst.grams:.2f} g** — {inst.notes}")
+                st.write(f"- **{inst.salt_name}** ({inst.formula}): **{inst.grams * 1000:.2f} mg** — {inst.notes}")
         else:
             st.info("No salts required (empty composition after filtering).")
 
     else:  # split task
         st.subheader("Split into cationic / anionic brines")
+
+        # ── brine mixing ──────────────────────────────────────────────────────
+        n_brines = st.radio(
+            "Number of brines to mix", [1, 2, 3], horizontal=True, key="n_brines"
+        )
+
+        brines_with_fractions: list[tuple] = []
+
+        if n_brines == 1:
+            brines_with_fractions = [(composition, 1.0)]
+        else:
+            frac1 = st.number_input(
+                "Brine 1 fraction", min_value=0.0, max_value=1.0,
+                value=0.5 if n_brines == 2 else 0.34,
+                step=0.01, format="%.2f", key="frac1",
+            )
+            brines_with_fractions.append((composition, frac1))
+
+            with st.expander("Brine 2", expanded=True):
+                frac2 = st.number_input(
+                    "Brine 2 fraction", min_value=0.0, max_value=1.0,
+                    value=round(1.0 - frac1, 2) if n_brines == 2 else 0.33,
+                    step=0.01, format="%.2f", key="frac2",
+                )
+                comp2 = build_manual_composition(unit, key_prefix="b2_")
+            brines_with_fractions.append((comp2, frac2))
+
+            if n_brines == 3:
+                with st.expander("Brine 3", expanded=True):
+                    frac3 = st.number_input(
+                        "Brine 3 fraction", min_value=0.0, max_value=1.0,
+                        value=round(max(0.0, 1.0 - frac1 - frac2), 2),
+                        step=0.01, format="%.2f", key="frac3",
+                    )
+                    comp3 = build_manual_composition(unit, key_prefix="b3_")
+                brines_with_fractions.append((comp3, frac3))
+
+            total_frac = sum(f for _, f in brines_with_fractions)
+            if abs(total_frac - 1.0) > 1e-4:
+                st.error(f"Fractions must sum to 1.0 — currently {total_frac:.4g}. Adjust before proceeding.")
+                return
+
+            mixed = mix_compositions(brines_with_fractions)
+            st.divider()
+            st.subheader("Mixed composition")
+            show_composition(mixed, unit)
+            m_balanced, m_delta = validate_charge_balance(mixed)
+            if m_balanced:
+                st.success("Mixed brine charge balance: OK")
+            else:
+                st.warning(f"Mixed brine charge balance: unbalanced (Δ = {m_delta:+.4g} eq/L).")
+            composition = mixed  # split the mixed brine
+
+        st.divider()
         cationic, anionic, split_warnings = split_brine(composition)
 
         col1, col2 = st.columns(2)
@@ -195,20 +252,27 @@ def main():
             for w in split_warnings:
                 st.warning(w)
 
+        sub_vol = volume_l / 2
         st.divider()
-        st.subheader(f"Preparation instructions — cationic brine ({volume_l:.3g} L)")
-        c_instr, c_warn = prepare_brine_instructions(cationic, volume_l=volume_l)
+        st.subheader(
+            f"Preparation instructions — cationic brine "
+            f"(prepare {sub_vol:.3g} L at 2× concentration)"
+        )
+        c_instr, c_warn = prepare_brine_instructions(cationic, volume_l=sub_vol)
         for w in c_warn:
             st.warning(w)
         for inst in c_instr:
-            st.write(f"- **{inst.salt_name}** ({inst.formula}): **{inst.grams:.2f} g** — {inst.notes}")
+            st.write(f"- **{inst.salt_name}** ({inst.formula}): **{inst.grams * 1000:.2f} mg** — {inst.notes}")
 
-        st.subheader(f"Preparation instructions — anionic brine ({volume_l:.3g} L)")
-        a_instr, a_warn = prepare_brine_instructions(anionic, volume_l=volume_l)
+        st.subheader(
+            f"Preparation instructions — anionic brine "
+            f"(prepare {sub_vol:.3g} L at 2× concentration)"
+        )
+        a_instr, a_warn = prepare_brine_instructions(anionic, volume_l=sub_vol)
         for w in a_warn:
             st.warning(w)
         for inst in a_instr:
-            st.write(f"- **{inst.salt_name}** ({inst.formula}): **{inst.grams:.2f} g** — {inst.notes}")
+            st.write(f"- **{inst.salt_name}** ({inst.formula}): **{inst.grams * 1000:.2f} mg** — {inst.notes}")
 
 
 if __name__ == "__main__":

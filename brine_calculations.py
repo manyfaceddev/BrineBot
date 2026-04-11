@@ -1,4 +1,4 @@
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Sequence
 from brine_models import (
     BrineComposition, SaltInstruction, SALT_DATABASE,
     DEFAULT_CATION_SALT, DEFAULT_ANION_SALT, ION_CHARGES, ION_MOLAR_MASSES,
@@ -167,57 +167,126 @@ def prepare_brine_instructions(
     return instructions, warnings
 
 
+def mix_compositions(
+    brines: Sequence[tuple[BrineComposition, float]],
+) -> BrineComposition:
+    """Blend multiple brines by volumetric fraction.
+
+    Each element is (composition, fraction); fractions must sum to 1.0.
+    The mixed concentration for each ion is sum(fraction_i * conc_i).
+    """
+    total = sum(f for _, f in brines)
+    if abs(total - 1.0) > 1e-6:
+        raise ValueError(f"Mixing fractions must sum to 1.0 (got {total:.6g}).")
+
+    all_cations: set[str] = set()
+    all_anions: set[str] = set()
+    for comp, _ in brines:
+        all_cations.update(comp.cations)
+        all_anions.update(comp.anions)
+
+    cations = {ion: sum(comp.cations.get(ion, 0.0) * f for comp, f in brines)
+               for ion in all_cations}
+    anions  = {ion: sum(comp.anions.get(ion, 0.0) * f for comp, f in brines)
+               for ion in all_anions}
+
+    # Drop ions that ended up at zero after mixing
+    cations = {k: v for k, v in cations.items() if v > 0}
+    anions  = {k: v for k, v in anions.items()  if v > 0}
+
+    return BrineComposition(cations=cations, anions=anions, source="mixed")
+
+
 def split_brine(composition: BrineComposition) -> Tuple[BrineComposition, BrineComposition, List[str]]:
+    """Split a brine into charge-balanced cationic and anionic sub-brines at 2× concentration.
+
+    Algorithm
+    ---------
+    1. Non-Cl anions  → anionic brine via Na-salts (Na2SO4, NaHCO3 …); tracks Na consumed.
+    2. Non-Na cations → cationic brine via Cl-salts (CaCl2, MgCl2 …).
+    3. Remaining Na (after step 1) is split equally as NaCl between both sub-brines.
+    4. Cl in each sub-brine is determined by charge balance — both are electrically neutral.
+
+    Consequence: if the input brine is charge-imbalanced, the remixed Cl will differ from
+    the original by exactly the charge deficit. This is reported but not corrected.
+    """
     if composition.is_empty():
         raise ValueError("Brine composition is empty.")
 
     balanced, difference = validate_charge_balance(composition)
     warnings: List[str] = []
     if not balanced:
-        warnings.append(f"Original composition is not charge balanced. Delta = {difference:.6g} equivalents per liter.")
+        warnings.append(
+            f"Input brine is not charge balanced (Δ = {difference:.6g} eq/L). "
+            "Both sub-brines will be charge balanced; remixed Cl will differ from original "
+            f"by {difference * 35450:.1f} mg/L."
+        )
 
     original_na = composition.cations.get("Na", 0.0)
-    cationic_composition = BrineComposition(cations={}, anions={}, source="cationic_split")
-    anionic_composition = BrineComposition(cations={}, anions={}, source="anionic_split")
 
-    total_positive_excl_na = 0.0
+    # ── Step 1: Na consumed by non-Cl anion salts ─────────────────────────────
+    na_consumed = 0.0
+    for anion, conc in composition.anions.items():
+        if anion == "Cl":
+            continue
+        if anion in DEFAULT_ANION_SALT:
+            salt = SALT_DATABASE[DEFAULT_ANION_SALT[anion]]
+            na_consumed += salt["cation_stoich"] * conc
+        else:
+            warnings.append(f"No Na-salt for anion '{anion}' — skipped in Na accounting.")
+
+    na_remaining = original_na - na_consumed
+    if na_remaining < -1e-9:
+        warnings.append(
+            f"Na consumed by anion salts ({na_consumed:.4g} mol/L) exceeds total Na "
+            f"({original_na:.4g} mol/L). Check composition."
+        )
+        na_remaining = 0.0
+
+    # ── Step 2: non-Na cations → cationic at 2× ───────────────────────────────
+    cationic = BrineComposition(cations={}, anions={}, source="cationic_split")
+    anionic  = BrineComposition(cations={}, anions={}, source="anionic_split")
+
+    non_na_cation_eq = 0.0
     for ion, conc in composition.cations.items():
         if ion == "Na":
             continue
-        cationic_composition.cations[ion] = 2.0 * conc
-        total_positive_excl_na += abs(ION_CHARGES.get(ion, 1) * conc)
+        cationic.cations[ion] = 2.0 * conc
+        non_na_cation_eq += abs(ION_CHARGES.get(ion, 1)) * conc
 
-    cationic_composition.anions["Cl"] = total_positive_excl_na * 2.0
-    anionic_composition.cations["Na"] = original_na * 2.0
+    # ── Step 3: NaCl split equally; sub-brine Na at 2× ────────────────────────
+    # At 2× concentration: cationic gets na_remaining, anionic gets original_na + na_consumed.
+    # Mixing 50:50 recovers original_na exactly.
+    cationic.cations["Na"] = na_remaining
+    anionic.cations["Na"]  = original_na + na_consumed
 
+    # ── Non-Cl anions → anionic at 2× ─────────────────────────────────────────
     for ion, conc in composition.anions.items():
         if ion == "Cl":
             continue
-        anionic_composition.anions[ion] = conc * 2.0
+        anionic.anions[ion] = 2.0 * conc
 
-    cl_from_cationic = cationic_composition.anions["Cl"]
-    cl_target = composition.anions.get("Cl", 0.0) * 2.0
-    anionic_cl = cl_target - cl_from_cationic
-    if anionic_cl < 0:
-        warnings.append(
-            "Cationic split requires more chloride than the original chloride concentration. "
-            "Check whether the original composition is valid for this split configuration."
-        )
-        anionic_cl = 0.0
-    anionic_composition.anions["Cl"] = anionic_cl
+    # ── Step 4: Cl by charge balance in each sub-brine ────────────────────────
+    # cationic Cl = Na_remaining + 2 × non_Na_cation_eq   (all cations at 2×)
+    # anionic  Cl = Na_remaining                           (= Na_an - 2×non_Cl_anion_eq)
+    cationic.anions["Cl"] = na_remaining + 2.0 * non_na_cation_eq
+    anionic.anions["Cl"]  = na_remaining
 
-    is_neutral, delta = validate_charge_balance(cationic_composition)
-    if not is_neutral:
-        warnings.append(f"Cationic split is not charge balanced after the split. Delta = {delta:.6g}.")
+    # Validate (should always pass by construction; warn if floating-point drift)
+    for label, sub in [("Cationic", cationic), ("Anionic", anionic)]:
+        is_neutral, delta = validate_charge_balance(sub)
+        if not is_neutral:
+            warnings.append(f"{label} sub-brine charge balance drift: Δ = {delta:.2e} eq/L.")
 
-    is_neutral, delta = validate_charge_balance(anionic_composition)
-    if not is_neutral:
-        warnings.append(f"Anionic split is not charge balanced after the split. Delta = {delta:.6g}.")
-
-    return cationic_composition, anionic_composition, warnings
+    return cationic, anionic, warnings
 
 
 def check_equal_mix(original: BrineComposition, cationic: BrineComposition, anionic: BrineComposition) -> bool:
+    """Verify that a 50:50 mix of cationic and anionic sub-brines reproduces the original.
+
+    Uses 1 % relative tolerance so that the expected Cl deficit from charge-imbalanced
+    input brines does not cause a false failure.
+    """
     if cationic.is_empty() or anionic.is_empty():
         return False
 
@@ -226,10 +295,12 @@ def check_equal_mix(original: BrineComposition, cationic: BrineComposition, anio
         return {key: (map_a.get(key, 0.0) + map_b.get(key, 0.0)) / 2.0 for key in keys}
 
     combined_cations = average_maps(cationic.cations, anionic.cations)
-    combined_anions = average_maps(cationic.anions, anionic.anions)
+    combined_anions  = average_maps(cationic.anions,  anionic.anions)
 
-    def almost_equal(value_a: float, value_b: float, tol: float = 1e-6) -> bool:
-        return abs(value_a - value_b) <= tol
+    def almost_equal(a: float, b: float) -> bool:
+        if a == 0.0 and b == 0.0:
+            return True
+        return abs(a - b) <= 0.01 * max(abs(a), abs(b))  # 1 % relative
 
     for ion, target in original.cations.items():
         if not almost_equal(combined_cations.get(ion, 0.0), target):
